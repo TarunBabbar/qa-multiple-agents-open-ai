@@ -1,168 +1,423 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type React from "react";
 import dynamic from "next/dynamic";
 import axios from "axios";
-import { Loader2, FileCode2, ClipboardList } from "lucide-react";
+import { FileCode2, ClipboardList, WandSparkles } from "lucide-react";
+import ThemeToggle from "../components/ThemeToggle";
+// PreferencesPopover removed for now
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
+type GeneratedFile = { name: string; content: string };
+
+type ParsedCase = {
+  title: string;
+  steps: string[];
+  expected?: string;
+  preconditions?: string[];
+};
+
 export default function Home() {
+  // UI state
   const [scenario, setScenario] = useState("");
-  const [testCases, setTestCases] = useState("");
-  const [files, setFiles] = useState<{ name: string; content: string }[]>([]);
+  const [testCasesRaw, setTestCasesRaw] = useState("");
+
+  const [parsedTestCases, setParsedTestCases] = useState<ParsedCase[]>([]);
+  // filter removed — we show the full list
+  const [selectedTestIndex, setSelectedTestIndex] = useState<number | null>(null);
+
+  const [files, setFiles] = useState<GeneratedFile[]>([]);
   const [activeFile, setActiveFile] = useState<string>("");
+
   const [loadingCases, setLoadingCases] = useState(false);
   const [loadingCode, setLoadingCode] = useState(false);
 
-  const generateTestCases = async () => {
-    setLoadingCases(true);
-    setTestCases("");
-    try {
-      const res = await axios.post("http://localhost:3001/testcases", { prompt: scenario });
-      setTestCases(res.data.testCases || "");
-    } catch (e) {
-      console.error(e);
-      alert("❌ Failed to generate test cases");
-    }
-    setLoadingCases(false);
+  const [editorFontSize] = useState(13);
+  const [themeMode, setThemeMode] = useState<"dark" | "light">("dark");
+
+  // Resizable columns state (% widths for left, middle, right)
+  const [colSizes, setColSizes] = useState<[number, number, number]>([28, 36, 36]);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const dragInfo = useRef<{ startX: number; idx: 0 | 1; startSizes: [number, number, number] } | null>(null);
+
+  const startDrag = (idx: 0 | 1) => (e: React.MouseEvent) => {
+    dragInfo.current = { startX: e.clientX, idx, startSizes: [...colSizes] as [number, number, number] };
+    window.addEventListener("mousemove", onDrag);
+    window.addEventListener("mouseup", endDrag);
+    e.preventDefault();
   };
 
-  const parseFilesFromResponse = (raw: string) => {
-  const cleaned = raw.replace(/\r\n/g, "\n"); 
+  const onDrag = (e: MouseEvent) => {
+    if (!dragInfo.current || !containerRef.current) return;
+    const { startX, idx, startSizes } = dragInfo.current;
+    const rect = containerRef.current.getBoundingClientRect();
+    const total = rect.width;
+    if (!total) return;
+    const deltaPx = e.clientX - startX;
+    const deltaPct = (deltaPx / total) * 100;
+    const min = [18, 24, 24];
+    const next: [number, number, number] = [...startSizes] as [number, number, number];
+    if (idx === 0) {
+      let a = startSizes[0] + deltaPct;
+      let b = startSizes[1] - deltaPct;
+      a = Math.max(min[0], a);
+      b = Math.max(min[1], b);
+      const diff = a + b - (startSizes[0] + startSizes[1]);
+      // keep total roughly same by adjusting in the opposite direction
+      if (diff !== 0) {
+        if (diff > 0) a -= diff; else b += -diff;
+      }
+      next[0] = a; next[1] = b; next[2] = startSizes[2];
+    } else {
+      let b = startSizes[1] + deltaPct;
+      let c = startSizes[2] - deltaPct;
+      b = Math.max(min[1], b);
+      c = Math.max(min[2], c);
+      const diff = b + c - (startSizes[1] + startSizes[2]);
+      if (diff !== 0) {
+        if (diff > 0) b -= diff; else c += -diff;
+      }
+      next[0] = startSizes[0]; next[1] = b; next[2] = c;
+    }
+    // ensure sum ~ 100
+    const sum = next[0] + next[1] + next[2];
+    if (Math.abs(sum - 100) > 0.01) {
+      const k = 100 / sum;
+      next[0] *= k; next[1] *= k; next[2] *= k;
+    }
+    setColSizes(next);
+  };
 
-  // Enhanced regex to match filenames even if wrapped differently
-  const fileRegex = /`?([\w\-.]+\.ts)`?\s*```(?:typescript|ts)?\s*([\s\S]*?)```/gim;
-  const results: { name: string; content: string }[] = [];
+  const endDrag = () => {
+    window.removeEventListener("mousemove", onDrag);
+    window.removeEventListener("mouseup", endDrag);
+    dragInfo.current = null;
+  };
 
-  let match;
-  while ((match = fileRegex.exec(cleaned)) !== null) {
-    const name = match[1].trim();
-    const content = match[2].trim();
-    results.push({ name, content });
-  }
+  // THEME — persist + apply to <html> + keep Monaco in sync
+  const applyTheme = (theme: "dark" | "light") => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("qa_theme", theme);
+    setThemeMode(theme);
+  };
 
-  if (results.length === 0 && raw.trim()) {
-    results.push({
-      name: "GeneratedTest.ts",
-      content: raw.trim(),
-    });
-  }
+  useEffect(() => {
+    const saved = (localStorage.getItem("qa_theme") as "dark" | "light" | null) || "dark";
+    applyTheme(saved);
+  }, []);
 
-  return results;
-};
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { theme: "dark" | "light" } | undefined;
+      if (detail?.theme) applyTheme(detail.theme);
+    };
+    window.addEventListener("qa:theme-change", handler as EventListener);
+    return () => window.removeEventListener("qa:theme-change", handler as EventListener);
+  }, []);
+
+  // ACTIONS
+  const generateTestCases = async () => {
+    setLoadingCases(true);
+    setParsedTestCases([]);
+    setSelectedTestIndex(null);
+    try {
+      const res = await axios.post("http://localhost:3001/testcases", { prompt: scenario });
+      const raw = String(res.data?.testCases || "").replace(/\r\n/g, "\n");
+      setTestCasesRaw(raw);
+      const parsed = parseTestCasesRobust(raw).filter(
+        (p) => !/^test cases?\s+for\b/i.test((p.title || "").trim())
+      );
+      setParsedTestCases(parsed);
+      setSelectedTestIndex(parsed.length ? 0 : null);
+    } catch (e) {
+      console.error(e);
+      alert("Failed to generate test cases.");
+    } finally {
+      setLoadingCases(false);
+    }
+  };
 
   const generateCode = async () => {
     setLoadingCode(true);
+    setFiles([]);
+    setActiveFile("");
     try {
       const res = await axios.post("http://localhost:3001/generate", {
-        prompt: `Generate Playwright test code for these test cases:\n${testCases}`,
+        prompt: `Generate Playwright test code for these test cases:\n${testCasesRaw}`,
       });
-
-      const allFiles = parseFilesFromResponse(res.data.code);
+      const allFiles = parseFilesFromResponse(String(res.data?.code || ""));
       setFiles(allFiles);
-      if (allFiles.length > 0) setActiveFile(allFiles[0].name);
+      if (allFiles.length) setActiveFile(allFiles[0].name);
     } catch (e) {
       console.error(e);
-      alert("❌ Failed to generate code");
+      alert("Failed to generate code.");
+    } finally {
+      setLoadingCode(false);
     }
-    setLoadingCode(false);
   };
 
+  // PARSERS
+  const parseFilesFromResponse = (raw: string): GeneratedFile[] => {
+    const cleaned = raw.replace(/\r\n/g, "\n");
+    const fileRegex = /`?([\w\-.]+\.ts)`?\s*```(?:typescript|ts)?\s*([\s\S]*?)```/gim;
+    const out: GeneratedFile[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = fileRegex.exec(cleaned)) !== null) {
+      out.push({ name: m[1].trim(), content: m[2].trim() });
+    }
+    if (!out.length && raw.trim()) out.push({ name: "GeneratedTest.ts", content: raw.trim() });
+    return out;
+  };
+
+  const parseTestCasesRobust = (raw: string): ParsedCase[] => {
+    const text = raw.replace(/\r\n/g, "\n").trim();
+    if (!text) return [];
+
+    const blocks: { title: string; body: string }[] = [];
+    const tcRegex =
+      /(?:^|\n)Test Case\s*\d*[:\-]?\s*(.+?)\n([\s\S]*?)(?=(?:\nTest Case\s*\d*[:\-]?|\n#|\n##|$))/gim;
+    let m: RegExpExecArray | null;
+    while ((m = tcRegex.exec(text)) !== null) blocks.push({ title: clean(m[1]), body: (m[2] || "").trim() });
+
+    if (!blocks.length) {
+      const mdRegex = /(?:^|\n)#{1,3}\s+(.+?)\n([\s\S]*?)(?=(?:\n#{1,3}\s+|$))/g;
+      while ((m = mdRegex.exec(text)) !== null) blocks.push({ title: clean(m[1]), body: (m[2] || "").trim() });
+    }
+    if (!blocks.length) blocks.push({ title: text.split("\n")[0] || "Test Case", body: text });
+
+    return blocks.map(({ title, body }) => {
+      const pre = capture(body, /(Pre\-?conditions?)\s*[:\-]?\s*/i, /(?:Steps|Expected|#|##|$)/i);
+      const steps = capture(body, /(Steps?)\s*[:\-]?\s*/i, /(?:Expected|Pre\-?conditions?|#|##|$)/i);
+      const exp = capture(body, /(Expected Result|Expected)\s*[:\-]?\s*/i, /(?:Pre\-?conditions?|Steps|#|##|$)/i);
+
+      const preconditions = toList(pre);
+      let stepsList = toList(steps);
+
+      if (!stepsList.length) {
+        const sentences = body
+          .replace(/\s+/g, " ")
+          .split(/(?<=[.!?])\s+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const action = /^(Navigate|Go to|Open|Click|Enter|Type|Select|Choose|Verify|Assert|Check|Fill|Press|Tap|Wait|Add|Remove|Login|Log in|Logout|Log out)\b/i;
+        stepsList = sentences.filter((s) => action.test(s));
+      }
+
+  // remove any stray asterisks (single or multiple) and backticks from expected
+  const expected = exp?.replace(/\*+/g, "").replace(/`/g, "").trim();
+
+      return {
+        title: title || "Untitled Test",
+        preconditions: preconditions.length ? preconditions : undefined,
+        steps: stepsList,
+        expected: expected || undefined,
+      };
+    });
+  };
+
+  const clean = (s: string) => s.replace(/[*_#`]/g, "").trim();
+  const capture = (src: string, start: RegExp, end: RegExp) => {
+    const s = start.exec(src);
+    if (!s) return undefined;
+    const tail = src.slice(s.index + s[0].length);
+    const e = end.exec(tail);
+    return e ? tail.slice(0, e.index).trim() : tail.trim();
+  };
+  const toList = (raw?: string): string[] =>
+    (raw || "")
+      .split(/\n/)
+      .map((l) =>
+        l
+          .replace(/^\s*[-*•]\s*/, "")
+          .replace(/^\s*\d+[.)]\s*/, "")
+          // strip any asterisks (single or multiple) and inline backticks
+          .replace(/\*+/g, "")
+          .replace(/`/g, "")
+          .trim()
+      )
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+  // Derived
+  const visible = useMemo(() => parsedTestCases.map((tc, i) => ({ ...tc, __i: i })), [parsedTestCases]);
+
+  const activeFileContent = useMemo(() => files.find((f) => f.name === activeFile)?.content || "", [files, activeFile]);
+
+  // UI
   return (
-    <div className="h-screen bg-gray-900 text-white flex flex-col">
-      <header className="bg-gradient-to-r from-indigo-700 to-purple-700 p-4 flex justify-between items-center">
-        <h1 className="text-2xl font-bold">🤖 QA Multi-Agent Assistant</h1>
-        <span className="opacity-75 text-sm">Powered by OpenAI + Playwright</span>
+    <div className="page-wrap">
+      {/* Header */}
+      <header className="header">
+        <div className="header__left">
+          <h1 className="headline">🤖 QA Multi-Agent Assistant</h1>
+        </div>
+        <div className="header__right">
+          <ThemeToggle />
+        </div>
       </header>
 
-      <main className="flex flex-1">
-        {/* Left panel */}
-        <div className="w-1/3 border-r border-gray-800 p-6 space-y-6 bg-gray-850">
-          {/* Step 1 */}
-          <section>
-            <h2 className="text-xl font-semibold flex items-center gap-2 mb-2">
-              🧠 Describe Your Scenario
-            </h2>
-            <textarea
-              value={scenario}
-              onChange={(e) => setScenario(e.target.value)}
-              placeholder="e.g. Add test cases for saucedemo.com"
-              className="w-full h-32 p-3 rounded-lg text-black"
-            />
+      {/* Top controls: scenario input + generate button */}
+      <div className="top-controls card p-4">
+        <div style={{ display: "flex", gap: 12, alignItems: "center", width: '100%' }}>
+          <input
+            className="input-field scenario-input"
+            placeholder="Describe your scenario..."
+            value={scenario}
+            onChange={(e) => setScenario(e.target.value)}
+          />
+          <div style={{ display: 'flex', gap: 10 }}>
             <button
               onClick={generateTestCases}
-              disabled={loadingCases || !scenario}
-              className="w-full bg-indigo-600 hover:bg-indigo-700 rounded-lg py-2 mt-3 font-semibold disabled:opacity-60"
+              disabled={loadingCases || !scenario.trim()}
+              aria-busy={loadingCases}
+              aria-live="polite"
+              className={`btn btn-primary h-12 ${loadingCases ? "is-loading" : ""}`}
             >
-              {loadingCases ? <Loader2 className="animate-spin inline mr-2" /> : "📋 Generate Test Cases"}
+              {loadingCases ? <span style={{ width: 20 }} /> : <WandSparkles className="h-5 w-5" />}
+              {loadingCases ? "Generating Test Cases…" : "Generate Test Cases"}
             </button>
-          </section>
 
-          {/* Step 2 */}
-          {testCases && (
-            <section>
-              <h2 className="text-lg font-semibold mb-2 flex items-center gap-2">
-                <ClipboardList size={20} /> Generated Test Cases
+            <button
+              onClick={generateCode}
+              disabled={loadingCode || !testCasesRaw.trim()}
+              aria-busy={loadingCode}
+              aria-live="polite"
+              className={`btn btn-success h-12 ${loadingCode ? "is-loading" : ""}`}
+            >
+              {loadingCode ? <span style={{ width: 20 }} /> : <FileCode2 className="h-5 w-5" />}
+              {loadingCode ? "Generating Automation Code…" : "Generate Test Code"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Grid */}
+      <main className="panel-row" ref={containerRef}>
+        {/* Left: Titles */}
+        <div className="col" style={{ width: `${colSizes[0]}%` }}>
+          <aside className="stack">
+          <section className="card p-6 flex flex-col">
+            <div className="mb-2">
+              <h2 className="section-title flex items-center gap-2">
+                <ClipboardList className="h-5 w-5" /> Generated Test Cases
               </h2>
-              <pre className="bg-gray-800 p-3 rounded-lg max-h-64 overflow-auto text-sm whitespace-pre-wrap">
-                {testCases}
-              </pre>
-              <button
-                onClick={generateCode}
-                disabled={loadingCode}
-                className="w-full bg-green-600 hover:bg-green-700 rounded-lg py-2 mt-3 font-semibold disabled:opacity-60"
-              >
-                {loadingCode ? <Loader2 className="animate-spin inline mr-2" /> : "⚡ Generate Test Code"}
-              </button>
-            </section>
-          )}
+            </div>
+            <div className="list flex-1 min-h-0">
+              {visible.length ? (
+                visible.map((tc) => (
+                  <button
+                    key={tc.__i}
+                    onClick={() => setSelectedTestIndex(tc.__i)}
+                    className={`list-item ${selectedTestIndex === tc.__i ? "is-active" : ""}`}
+                    title={tc.title}
+                  >
+                    {tc.title}
+                  </button>
+                ))
+              ) : (
+                <div/>
+                )}
+            </div>
+
+            {/* Generate Test Code now in the top controls */}
+          </section>
+          </aside>
         </div>
 
-        {/* Right panel */}
-        <div className="flex-1 grid grid-cols-[250px_1fr]">
-          {/* File explorer */}
-          <aside className="bg-gray-850 p-4 border-r border-gray-800">
-            <h2 className="text-lg font-bold flex items-center gap-2 mb-3">
-              📁 Generated Files
-            </h2>
-            <ul className="space-y-1">
-              {files.map((file) => (
-                <li
-                  key={file.name}
-                  onClick={() => setActiveFile(file.name)}
-                  className={`cursor-pointer flex items-center gap-2 p-2 rounded-lg transition ${
-                    activeFile === file.name
-                      ? "bg-indigo-700 text-white"
-                      : "hover:bg-gray-700"
-                  }`}
-                >
-                  <FileCode2 size={16} /> {file.name}
-                </li>
-              ))}
-            </ul>
-          </aside>
+        {/* Handle between left and middle */}
+        <div className="resize-handle" onMouseDown={startDrag(0)} />
 
-          {/* Monaco Editor */}
-          <section className="p-4 bg-gray-900">
-            <h2 className="text-xl font-semibold mb-3 flex items-center gap-2">
-              🧑‍💻 {activeFile || "No file selected"}
-            </h2>
-            <div className="border border-gray-700 rounded-lg overflow-hidden">
-              <MonacoEditor
-                height="85vh"
-                language="typescript"
-                value={files.find((f) => f.name === activeFile)?.content || ""}
-                theme="vs-dark"
-                options={{
-                  fontSize: 14,
-                  minimap: { enabled: true },
-                  scrollBeyondLastLine: false,
-                  wordWrap: "on",
-                }}
-              />
+        {/* Middle: Preview */}
+        <div className="col" style={{ width: `${colSizes[1]}%` }}>
+        <section className="card p-6">
+          <div className="mb-4">
+            <h2 className="section-title">📋 Test Case Preview</h2>
+          </div>
+
+          {selectedTestIndex !== null && parsedTestCases[selectedTestIndex] ? (
+            <div className="preview">
+              <h3 className="preview__title">{parsedTestCases[selectedTestIndex].title}</h3>
+
+              {parsedTestCases[selectedTestIndex].preconditions && (
+                <div className="preview__block">
+                  <div className="preview__heading">Preconditions</div>
+                  <ul>
+                    {parsedTestCases[selectedTestIndex].preconditions!.map((p, i) => (
+                      <li key={i}>{p}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="preview__block">
+                <div className="preview__heading">Steps</div>
+                {parsedTestCases[selectedTestIndex].steps.length ? (
+                  <ol>
+                    {parsedTestCases[selectedTestIndex].steps.map((s, i) => (
+                      <li key={i}>{s}</li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="muted">No steps parsed.</p>
+                )}
+              </div>
+
+              <div className="preview__block">
+                <div className="preview__heading">Expected Result</div>
+                <p>{parsedTestCases[selectedTestIndex].expected || "—"}</p>
+              </div>
             </div>
-          </section>
+          ) : (
+            <div/>
+          )}
+        </section>
+        </div>
+
+        {/* Handle between middle and right */}
+        <div className="resize-handle" onMouseDown={startDrag(1)} />
+
+        {/* Right: Editor with VS Code Tabs */}
+        <div className="col" style={{ width: `${colSizes[2]}%` }}>
+        <section className="card p-0 editor">
+          <div className="editor__header">
+            <div>
+              <h2 className="section-title">💻 Automation Code Output</h2>
+            </div>
+          </div>
+
+          <div className="code-tab-bar">
+            {files.length
+              ? files.map((f) => (
+                  <button
+                    key={f.name}
+                    onClick={() => setActiveFile(f.name)}
+                    className={`code-tab ${activeFile === f.name ? "active" : ""}`}
+                    title={f.name}
+                  >
+                    {f.name}
+                  </button>
+                ))
+              : null}
+          </div>
+
+          <div className="editor__body">
+            <MonacoEditor
+              height="100%"
+              language="typescript"
+              value={activeFileContent}
+              theme={themeMode === "light" ? "vs-light" : "vs-dark"}
+              options={{
+                fontSize: editorFontSize,
+                minimap: { enabled: false },
+                scrollBeyondLastLine: false,
+                wordWrap: "on",
+                automaticLayout: true,
+              }}
+            />
+          </div>
+        </section>
         </div>
       </main>
     </div>

@@ -24,8 +24,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
-        {children}
+      <body className={`${geistSans.variable} ${geistMono.variable} bg-gradient-to-b`}> 
+        <div className="min-h-screen px-6 py-6">
+          <main className="max-w-[1400px] mx-auto">{children}</main>
+        </div>
       </body>
     </html>
   );
