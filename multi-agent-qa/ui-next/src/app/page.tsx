@@ -158,6 +158,61 @@ export default function Home() {
     }
   };
 
+  // DOWNLOADS
+  const downloadBlob = (filename: string, blob: Blob) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadTestCasesCSV = () => {
+    if (!parsedTestCases || !parsedTestCases.length) {
+      alert("No test cases to download");
+      return;
+    }
+    const esc = (s?: string) => {
+      if (!s) return "";
+      return '"' + String(s).replace(/"/g, '""') + '"';
+    };
+    const rows: string[] = [];
+    rows.push(["Title", "Preconditions", "Steps", "Expected"].map(esc).join(","));
+    for (const tc of parsedTestCases) {
+      const pre = (tc.preconditions || []).join(" | ");
+      const steps = (tc.steps || []).map((s, i) => `${i + 1}. ${s}`).join(" || ");
+      const exp = tc.expected || "";
+      rows.push([tc.title || "", pre, steps, exp].map(esc).join(","));
+    }
+    const csv = rows.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    downloadBlob("test-cases.csv", blob);
+  };
+
+  const downloadCodeZip = async () => {
+    if (!files || !files.length) {
+      alert("No generated code to download");
+      return;
+    }
+    try {
+      const JSZip = (await import("jszip")).default;
+      const zip = new JSZip();
+      for (const f of files) {
+        // ensure file name safe
+        const name = f.name || "file.txt";
+        zip.file(name, f.content || "");
+      }
+      const content = await zip.generateAsync({ type: "blob" });
+      downloadBlob("automation-code.zip", content);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to create zip for download. Make sure 'jszip' is installed.");
+    }
+  };
+
   // PARSERS
   const parseFilesFromResponse = (raw: string): GeneratedFile[] => {
     const cleaned = raw.replace(/\r\n/g, "\n");
@@ -288,6 +343,14 @@ export default function Home() {
             >
               {loadingCode ? <span style={{ width: 20 }} /> : <FileCode2 className="h-5 w-5" />}
               {loadingCode ? "Generating Automation Code…" : "Generate Test Code"}
+            </button>
+
+            <button onClick={downloadTestCasesCSV} className="btn btn-download-primary h-12" disabled={!parsedTestCases.length}>
+              📥 Download Test Cases
+            </button>
+
+            <button onClick={downloadCodeZip} className="btn btn-download-zip h-12" disabled={!files.length}>
+              📦 Download Code
             </button>
           </div>
         </div>

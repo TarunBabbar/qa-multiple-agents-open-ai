@@ -25,6 +25,10 @@
   --accent-700: #6d28d9;
   --success: #10b981;
   --success-600: #059669;
+  --info: #3b82f6;
+  --info-600: #2563eb;
+  --code: #d97706; /* amber */
+  --code-600: #b45309;
   --danger: #ef4444;
   --warning: #f59e0b;
 
@@ -132,7 +136,7 @@ body {
 /* Top controls */
 .top-controls { width: 100%; }
 .top-controls { width: 100%; display: flex; align-items: center; margin-top: -50px; }
-.scenario-input { flex: 0 1 68%; min-width: 320px; max-width: 78%; }
+.scenario-input { flex: 1 1 72%; min-width: 420px; max-width: 92%; }
 .top-controls .input-field { border-radius: 14px; }
 .top-controls .btn { height: 44px; }
 
@@ -319,11 +323,16 @@ body {
   transition: all 0.15s ease;
   position: relative;
   overflow: hidden;
+  white-space: nowrap; /* keep icon and label on single line */
+  text-align: center;
+  min-width: 160px;
 }
 .btn:disabled {
-  opacity: 0.6;
+  opacity: 0.7;
   cursor: not-allowed;
   transform: none !important;
+  /* ensure disabled buttons keep readable background */
+  /* background: linear-gradient(180deg, rgba(0,0,0,0.03), rgba(0,0,0,0.02)); */
 }
 .btn:not(:disabled):hover {
   transform: translateY(-1px);
@@ -335,6 +344,13 @@ body {
 .btn:focus-visible { 
   outline: none; 
   box-shadow: var(--ring);
+}
+
+/* Ensure inline elements inside buttons align vertically */
+.btn > svg, .btn > img, .btn > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 /* Loading state visuals for buttons */
 .btn.is-loading {
@@ -420,6 +436,107 @@ body {
   color: var(--text);
   box-shadow: 0 4px 12px rgba(139,92,246,0.2);
 }
+
+/* Download button style (neutral action) */
+.btn-download {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--card-border);
+  box-shadow: none;
+  padding: 0 18px;
+  min-width: 150px;
+  font-weight: 700;
+}
+.btn-download:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.btn-download:disabled {
+  opacity: 0.6;
+}
+
+/* Light theme: ensure download buttons have visible contrast */
+[data-theme="light"] .btn-download {
+  background: var(--bg-alt);
+  color: var(--text);
+  border-color: rgba(17,24,39,0.08);
+  box-shadow: 0 2px 6px rgba(17,24,39,0.04);
+}
+
+/* Download variants */
+.btn-download-primary {
+  background: linear-gradient(135deg, var(--info) 0%, var(--info-600) 100%);
+  color: white;
+  border: 1px solid rgba(59,130,246,0.22);
+  box-shadow: 0 6px 18px rgba(59,130,246,0.12);
+}
+.btn-download-primary:disabled {
+  background: var(--surface);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.btn-download-zip {
+  background: linear-gradient(135deg, var(--code) 0%, var(--code-600) 100%);
+  color: white;
+  border: 1px solid rgba(217,119,6,0.22);
+  box-shadow: 0 6px 18px rgba(217,119,6,0.10);
+}
+.btn-download-zip:disabled {
+  background: var(--surface);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+/* Keep the original variant colors (purple/green/amber) while loading
+   - remove the shimmer overlay for these important action buttons
+   - avoid opacity/filter changes that wash out the gradients */
+.btn-primary.is-loading,
+.btn-success.is-loading,
+.btn-download-primary.is-loading,
+.btn-download-zip.is-loading,
+.btn.theme-toggle.is-loading {
+  opacity: 1 !important;
+  filter: none !important;
+  pointer-events: none; /* still prevent interaction while generating */
+}
+
+.btn-primary.is-loading::before,
+.btn-success.is-loading::before,
+.btn-download-primary.is-loading::before,
+.btn-download-zip.is-loading::before {
+  /* remove the full-size tint overlays to avoid darkening the base gradient */
+  display: none !important;
+}
+
+/* Variant-specific colored stripe overlays (low-alpha, normal blend) */
+.btn-primary.is-loading::after,
+.btn-success.is-loading::after,
+.btn-download-primary.is-loading::after,
+.btn-download-zip.is-loading::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  /* subtle white sheen that sweeps left-to-right; uses screen blend to brighten */
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0) 0%,
+    rgba(255,255,255,0.18) 45%,
+    rgba(255,255,255,0.08) 50%,
+    rgba(255,255,255,0.18) 55%,
+    rgba(255,255,255,0) 100%
+  );
+  background-size: 200% 100%;
+  animation: btn-sheen 1.2s linear infinite;
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+@keyframes btn-sheen {
+  0% { background-position: -100% 0; }
+  100% { background-position: 200% 0; }
+}
+
 
 /* Preview */
 .preview { 
