@@ -215,15 +215,75 @@ export default function Home() {
 
   // PARSERS
   const parseFilesFromResponse = (raw: string): GeneratedFile[] => {
-    const cleaned = raw.replace(/\r\n/g, "\n");
-    const fileRegex = /`?([\w\-.]+\.ts)`?\s*```(?:typescript|ts)?\s*([\s\S]*?)```/gim;
-    const out: GeneratedFile[] = [];
-    let m: RegExpExecArray | null;
-    while ((m = fileRegex.exec(cleaned)) !== null) {
-      out.push({ name: m[1].trim(), content: m[2].trim() });
+    const cleaned = raw.replace(/\r\n/g, "\n").trim();
+    if (!cleaned) return [];
+
+    const files: GeneratedFile[] = [];
+    
+    // Split the content by header patterns like "// src/tests/homePage.spec.ts" or "# README.md"
+    const headerPattern = /^(\/\/|#)\s+([\w./-]+\.[a-zA-Z0-9]+)\s*$/gm;
+    
+    let lastIndex = 0;
+    let match;
+    let firstFile = true;
+    
+    while ((match = headerPattern.exec(cleaned)) !== null) {
+      // If this isn't the first match, extract the previous file's content
+      if (!firstFile) {
+        const prevContent = cleaned.substring(lastIndex, match.index).trim();
+        if (files.length > 0) {
+          files[files.length - 1].content = cleanFileContent(prevContent);
+        }
+      }
+      
+      // Extract filename from the header
+      const filename = match[2].trim();
+      const normalizedName = filename.replace(/\\/g, "/").replace(/^\.*\/?/, "");
+      
+      // Add the new file (content will be filled in next iteration or at the end)
+      files.push({ name: normalizedName, content: "" });
+      
+      // Update position after this header line
+      lastIndex = match.index + match[0].length;
+      // Skip to next line
+      const nextLineIndex = cleaned.indexOf('\n', lastIndex);
+      if (nextLineIndex !== -1) {
+        lastIndex = nextLineIndex + 1;
+      }
+      
+      firstFile = false;
     }
-    if (!out.length && raw.trim()) out.push({ name: "GeneratedTest.ts", content: raw.trim() });
-    return out;
+    
+    // Handle the case where we have no headers but do have content
+    if (files.length === 0 && cleaned.trim()) {
+      return [{ name: "src/pages/HomePage.ts", content: cleanFileContent(cleaned) }];
+    }
+    
+    // Handle the last file's content
+    if (files.length > 0) {
+      const lastContent = cleaned.substring(lastIndex).trim();
+      files[files.length - 1].content = cleanFileContent(lastContent);
+    }
+    
+    // If we still have no files but have content, create a default file
+    if (files.length === 0 && cleaned.trim()) {
+      return [{ name: "GeneratedOutput.ts", content: cleanFileContent(cleaned) }];
+    }
+
+    return files.filter(f => f.name && f.content.trim());
+  };
+
+  // Helper function to clean unwanted markers from file content
+  const cleanFileContent = (content: string): string => {
+    return content
+      // Remove code block markers at the end
+      .replace(/```\s*\w*\s*$/gm, '')
+      // Remove code block markers at the beginning
+      .replace(/^```\s*\w*\s*\n?/gm, '')
+      // Remove any trailing backticks
+      .replace(/`{3,}\s*$/gm, '')
+      // Clean up extra whitespace
+      .trim();
   };
 
   const parseTestCasesRobust = (raw: string): ParsedCase[] => {
@@ -242,7 +302,7 @@ export default function Home() {
     }
     if (!blocks.length) blocks.push({ title: text.split("\n")[0] || "Test Case", body: text });
 
-    return blocks.map(({ title, body }) => {
+    const cases = blocks.map(({ title, body }) => {
       const pre = capture(body, /(Pre\-?conditions?)\s*[:\-]?\s*/i, /(?:Steps|Expected|#|##|$)/i);
       const steps = capture(body, /(Steps?)\s*[:\-]?\s*/i, /(?:Expected|Pre\-?conditions?|#|##|$)/i);
       const exp = capture(body, /(Expected Result|Expected)\s*[:\-]?\s*/i, /(?:Pre\-?conditions?|Steps|#|##|$)/i);
@@ -269,6 +329,13 @@ export default function Home() {
         steps: stepsList,
         expected: expected || undefined,
       };
+    });
+
+    // Filter out generic headings (e.g., "Manual Test Cases...") and entries without steps
+    return cases.filter((tc) => {
+      const t = (tc.title || "").toLowerCase();
+      const isHeading = /manual\s+test\s+cases|^test\s*cases\b/.test(t);
+      return !isHeading && tc.steps && tc.steps.length > 0;
     });
   };
 

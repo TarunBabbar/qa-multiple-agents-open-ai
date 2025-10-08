@@ -33,6 +33,27 @@ function normalizeLLMOutput(raw: string): string {
     .trim();
 }
 
+// Ensure each file content starts with a header comment of its path
+function enforceHeaderComments(raw: string): string {
+  // Matches: `path/filename.ext` ```lang\ncontent``` blocks
+  const blockRegex = /`\s*([^`\n]+?)\s*`\s*```([a-zA-Z0-9+\-]*)?\s*([\s\S]*?)```/gim;
+  return raw.replace(blockRegex, (_full, fname: string, lang: string, body: string) => {
+    const name = String(fname).trim();
+    const content = String(body).replace(/\r\n/g, "\n");
+    const lines = content.split("\n");
+    // find first non-empty line
+    let i = 0; while (i < lines.length && !lines[i].trim()) i++;
+    const first = (lines[i] || "").trim();
+    const hasHeader = /^\/(\/|\*)|^#/.test(first) && first.includes(name.split('/').pop() || "");
+    if (hasHeader) return `\`${name}\`\n\n\`\`\`${lang || ''}\n${content}\n\`\`\``; // unchanged
+    // inject header comment based on lang (markdown -> #, else //)
+    const isMd = /md|markdown/i.test(lang || "");
+    const header = isMd ? `# ${name.split('/').pop()}` : `// ${name}`;
+    const injected = [header, ...lines].join("\n");
+    return `\`${name}\`\n\n\`\`\`${lang || ''}\n${injected}\n\`\`\``;
+  });
+}
+
 app.post("/generate", async (req, res) => {
   const { prompt } = req.body;
 
@@ -40,7 +61,7 @@ app.post("/generate", async (req, res) => {
     const generated = await generatePlaywrightTest(prompt);
     const validated = await validateAndFixTest(generated);
 
-    const normalized = normalizeLLMOutput(validated || generated);
+  const normalized = enforceHeaderComments(normalizeLLMOutput(validated || generated));
     res.json({ code: normalized });
   } catch (err) {
     console.error("❌ Backend error:", err);
