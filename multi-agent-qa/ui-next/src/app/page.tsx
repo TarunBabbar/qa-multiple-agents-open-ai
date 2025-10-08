@@ -256,7 +256,7 @@ export default function Home() {
     
     // Handle the case where we have no headers but do have content
     if (files.length === 0 && cleaned.trim()) {
-      return [{ name: "src/pages/HomePage.ts", content: cleanFileContent(cleaned) }];
+      return [];
     }
     
     // Handle the last file's content
